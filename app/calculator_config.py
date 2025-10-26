@@ -1,28 +1,54 @@
-# app/calculator_config.py
 import os
 from pathlib import Path
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv()  # loads from .env if present
+load_dotenv()  # load from .env if present
 
 @dataclass
 class Config:
-    AUTO_SAVE: bool
-    AUTO_SAVE_PATH: str
-    HISTORY_PATH: str
+    CALCULATOR_LOG_DIR: str
+    CALCULATOR_HISTORY_DIR: str
+    CALCULATOR_HISTORY_FILE: str
+    CALCULATOR_AUTO_SAVE: bool
+    CALCULATOR_AUTO_SAVE_PATH: str
+    CALCULATOR_MAX_HISTORY_SIZE: int
+    CALCULATOR_PRECISION: int
+    CALCULATOR_MAX_INPUT_VALUE: float
+    CALCULATOR_DEFAULT_ENCODING: str
+
+def _bool_from_env(key: str, default: str = "false") -> bool:
+    return os.getenv(key, default).lower() in ("1", "true", "yes", "on")
 
 def load_config() -> Config:
-    auto_save = os.getenv("AUTO_SAVE", "false").lower() in ("1","true","yes")
-    auto_save_path = os.getenv("AUTO_SAVE_PATH", "history.csv")
-    history_path = os.getenv("HISTORY_PATH", "history.csv")
+    # Files/directories
+    log_dir = os.getenv("CALCULATOR_LOG_DIR", "logs")
+    history_dir = os.getenv("CALCULATOR_HISTORY_DIR", "data")
+    history_file = os.getenv("CALCULATOR_HISTORY_FILE", "data/history.csv")
+    auto_save = _bool_from_env("CALCULATOR_AUTO_SAVE", "false")
+    auto_save_path = os.getenv("CALCULATOR_AUTO_SAVE_PATH", history_file)
 
-    # validate
-    if not Path(auto_save_path).parent.exists():
-        # try creating dir if needed
+    # Behavior
+    max_history_size = int(os.getenv("CALCULATOR_MAX_HISTORY_SIZE", "1000"))
+    precision = int(os.getenv("CALCULATOR_PRECISION", "6"))
+    max_input = float(os.getenv("CALCULATOR_MAX_INPUT_VALUE", "1e12"))
+    encoding = os.getenv("CALCULATOR_DEFAULT_ENCODING", "utf-8")
+
+    # ensure directories exist (create if needed)
+    for p in (log_dir, history_dir, Path(auto_save_path).parent):
         try:
-            Path(auto_save_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(p).mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            raise ValueError(f"Invalid AUTO_SAVE_PATH: {e}")
+            raise ValueError(f"Unable to create directory {p}: {e}")
 
-    return Config(AUTO_SAVE=auto_save, AUTO_SAVE_PATH=auto_save_path, HISTORY_PATH=history_path)
+    return Config(
+        CALCULATOR_LOG_DIR=str(log_dir),
+        CALCULATOR_HISTORY_DIR=str(history_dir),
+        CALCULATOR_HISTORY_FILE=str(history_file),
+        CALCULATOR_AUTO_SAVE=auto_save,
+        CALCULATOR_AUTO_SAVE_PATH=str(auto_save_path),
+        CALCULATOR_MAX_HISTORY_SIZE=max_history_size,
+        CALCULATOR_PRECISION=precision,
+        CALCULATOR_MAX_INPUT_VALUE=max_input,
+        CALCULATOR_DEFAULT_ENCODING=encoding
+    )
