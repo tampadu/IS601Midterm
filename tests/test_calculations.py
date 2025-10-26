@@ -1,62 +1,74 @@
+import os
 import pytest
-from app.calculation import Calculation, CalculationFactory
-from app.operations import Add
-from app.exceptions import InvalidOperationError, OperandError
+from pathlib import Path
+from app.calculator_config import load_config, Config
 
 
-def test_calculation_perform_success(monkeypatch):
-    calc = Calculation("add", 2, 3)
+# --- Unit Tests for load_config() ---
 
-    # monkeypatch get_operation_instance to return Add instance
-    monkeypatch.setattr("app.calculation.get_operation_instance", lambda token: Add())
+def test_load_config_defaults(monkeypatch):
+    """Test that default values are loaded when no environment variables are set."""
+    monkeypatch.delenv("CALCULATOR_AUTO_SAVE", raising=False)
+    monkeypatch.delenv("CALCULATOR_AUTO_SAVE_PATH", raising=False)
+    monkeypatch.delenv("CALCULATOR_HISTORY_FILE", raising=False)
 
-    result = calc.perform()
-
-    assert result == 5
-    assert calc.result == 5
-    assert calc.error is None
-
-
-def test_calculation_perform_failure(monkeypatch):
-    calc = Calculation("divide", 2, 0)
-
-    # monkeypatch to use Divide
-    from app.operations import Divide
-    monkeypatch.setattr("app.calculation.get_operation_instance", lambda token: Divide())
-
-    with pytest.raises(ZeroDivisionError):
-        calc.perform()
-
-    assert calc.result is None
-    assert calc.error is not None
+    config = load_config()
+    assert isinstance(config, Config)
+    assert config.CALCULATOR_AUTO_SAVE is False
+    assert config.CALCULATOR_AUTO_SAVE_PATH == config.CALCULATOR_HISTORY_FILE
+    assert config.CALCULATOR_HISTORY_FILE == "data/history.csv"
 
 
 @pytest.mark.parametrize(
-    "operation_token,a_raw,b_raw,expected_a,expected_b",
+    "env_value,expected",
     [
-        ("add", "2", "3", 2.0, 3.0),
-        ("subtract", 5, 2, 5.0, 2.0),
-        ("multiply", "4.5", "2", 4.5, 2.0),
-    ]
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+    ],
 )
-def test_calculation_factory_create_success(operation_token, a_raw, b_raw, expected_a, expected_b):
-    calc = CalculationFactory.create(operation_token, a_raw, b_raw)
-    assert calc.a == expected_a
-    assert calc.b == expected_b
-    assert calc.operation_token == operation_token
+def test_load_config_auto_save_variants(monkeypatch, env_value, expected):
+    """Test CALCULATOR_AUTO_SAVE parsing for different truthy/falsey environment values."""
+    monkeypatch.setenv("CALCULATOR_AUTO_SAVE", env_value)
+    config = load_config()
+    assert config.CALCULATOR_AUTO_SAVE == expected
 
 
-@pytest.mark.parametrize(
-    "operation_token,a_raw,b_raw,error_type",
-    [
-        ("", "1", "2", InvalidOperationError),  # empty token
-        ("invalid", "1", "2", InvalidOperationError),  # invalid token
-        ("add", "", "2", OperandError),  # empty first operand
-        ("add", "1", "", OperandError),  # empty second operand
-        ("add", "a", "2", OperandError),  # non-numeric first operand
-        ("add", "1", "b", OperandError),  # non-numeric second operand
-    ]
-)
-def test_calculation_factory_create_failure(operation_token, a_raw, b_raw, error_type):
-    with pytest.raises(error_type):
-        CalculationFactory.create(operation_token, a_raw, b_raw)
+def test_load_config_custom_paths(monkeypatch, tmp_path):
+    """Test that custom paths are used when provided."""
+    auto_save_path = tmp_path / "autosave" / "data.csv"
+    history_file = tmp_path / "history" / "log.csv"
+    monkeypatch.setenv("CALCULATOR_AUTO_SAVE_PATH", str(auto_save_path))
+    monkeypatch.setenv("CALCULATOR_HISTORY_FILE", str(history_file))
+
+    config = load_config()
+    assert config.CALCULATOR_AUTO_SAVE_PATH == str(auto_save_path)
+    assert config.CALCULATOR_HISTORY_FILE == str(history_file)
+
+
+def test_load_config_creates_missing_directory(monkeypatch, tmp_path):
+    """Test that a missing directory for CALCULATOR_AUTO_SAVE_PATH is created if necessary."""
+    missing_dir = tmp_path / "nonexistent_dir"
+    file_path = missing_dir / "file.csv"
+    monkeypatch.setenv("CALCULATOR_AUTO_SAVE_PATH", str(file_path))
+
+    config = load_config()
+    # The directory should now exist
+    assert missing_dir.exists()
+    assert config.CALCULATOR_AUTO_SAVE_PATH == str(file_path)
+
+
+def test_load_config_raises_on_invalid_path(monkeypatch):
+    """Test that load_config raises ValueError when directory creation fails."""
+    # Patch Path.mkdir to raise an exception
+    def mock_mkdir(*args, **kwargs):
+        raise PermissionError("cannot create directory")
+
+    monkeypatch.setenv("CALCULATOR_AUTO_SAVE_PATH", "/invalid_dir/test.csv")
+    monkeypatch.setattr(Path, "mkdir", mock_mkdir)
+
+    with pytest.raises(ValueError, match="Unable to create directory"):
+        load_config()

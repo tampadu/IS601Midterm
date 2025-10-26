@@ -3,7 +3,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-load_dotenv()  # load from .env if present
+load_dotenv()
+
 
 @dataclass
 class Config:
@@ -16,25 +17,27 @@ class Config:
     CALCULATOR_PRECISION: int
     CALCULATOR_MAX_INPUT_VALUE: float
     CALCULATOR_DEFAULT_ENCODING: str
+    HISTORY_PATH: str  # some tests expect this
+
 
 def _bool_from_env(key: str, default: str = "false") -> bool:
     return os.getenv(key, default).lower() in ("1", "true", "yes", "on")
 
+
 def load_config() -> Config:
-    # Files/directories
     log_dir = os.getenv("CALCULATOR_LOG_DIR", "logs")
     history_dir = os.getenv("CALCULATOR_HISTORY_DIR", "data")
     history_file = os.getenv("CALCULATOR_HISTORY_FILE", "data/history.csv")
+    history_path = os.getenv("HISTORY_PATH", history_file)
     auto_save = _bool_from_env("CALCULATOR_AUTO_SAVE", "false")
     auto_save_path = os.getenv("CALCULATOR_AUTO_SAVE_PATH", history_file)
 
-    # Behavior
     max_history_size = int(os.getenv("CALCULATOR_MAX_HISTORY_SIZE", "1000"))
     precision = int(os.getenv("CALCULATOR_PRECISION", "6"))
     max_input = float(os.getenv("CALCULATOR_MAX_INPUT_VALUE", "1e12"))
     encoding = os.getenv("CALCULATOR_DEFAULT_ENCODING", "utf-8")
 
-    # ensure directories exist (create if needed)
+    # Ensure directories exist
     for p in (log_dir, history_dir, Path(auto_save_path).parent):
         try:
             Path(p).mkdir(parents=True, exist_ok=True)
@@ -50,5 +53,6 @@ def load_config() -> Config:
         CALCULATOR_MAX_HISTORY_SIZE=max_history_size,
         CALCULATOR_PRECISION=precision,
         CALCULATOR_MAX_INPUT_VALUE=max_input,
-        CALCULATOR_DEFAULT_ENCODING=encoding
+        CALCULATOR_DEFAULT_ENCODING=encoding,
+        HISTORY_PATH=str(history_path),
     )

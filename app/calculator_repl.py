@@ -1,7 +1,8 @@
 import datetime
+from pathlib import Path
 from typing import Optional
 from app.calculation import CalculationFactory
-from app.history import HistoryManager, HistoryObserver, AutoSaveObserver, LoggingObserver
+from app.history import HistoryManager, AutoSaveObserver, LoggingObserver
 from app.calculator_memento import Caretaker
 from app.calculator_config import load_config
 from app.operations import get_operation_instance
@@ -11,36 +12,36 @@ from app.input_validators import parse_operands_eafp
 class Calculator:
     def __init__(self):
         self.config = load_config()
-        self.history = HistoryManager(csv_path=self.config.CALCULATOR_HISTORY_FILE, encoding=self.config.CALCULATOR_DEFAULT_ENCODING)
+        self.history = HistoryManager(csv_path=self.config.CALCULATOR_HISTORY_FILE,
+                                      encoding=self.config.CALCULATOR_DEFAULT_ENCODING)
         self.caretaker = Caretaker()
-        # attach observers as requested
-        # Logging observer writes to a log file inside the CALCULATOR_LOG_DIR
+
+        # attach observers
         log_file = Path(self.config.CALCULATOR_LOG_DIR) / "calculator_history.log"
         self.history.attach(LoggingObserver(str(log_file)))
         if self.config.CALCULATOR_AUTO_SAVE:
             self.history.attach(AutoSaveObserver(self.history, self.config.CALCULATOR_AUTO_SAVE_PATH))
+
         # save initial state
         self.caretaker.save(self.history.df)
 
     # Facade methods
     def evaluate(self, op_token: str, a_raw: str, b_raw: str) -> float:
         calc = CalculationFactory.create(op_token, a_raw, b_raw)
-        # before state
         self.caretaker.save(self.history.df)
         try:
             result = calc.perform()
             self.history.add(calc.operation_token, calc.a, calc.b, result, calc.error, datetime.datetime.utcnow().isoformat())
-            # AutoSaveObserver will handle saving if attached, but keep a fallback
             if self.config.CALCULATOR_AUTO_SAVE:
                 try:
                     self.history.save(self.config.CALCULATOR_AUTO_SAVE_PATH)
                 except Exception:
                     pass
             return result
-        except Exception:
-            # still record failed calc
-            self.history.add(calc.operation_token, calc.a, calc.b, None, calc.error, datetime.datetime.utcnow().isoformat())
-            raise
+        except Exception as e:
+            self.history.add(calc.operation_token, calc.a, calc.b, None, str(e), datetime.datetime.utcnow().isoformat())
+            # Re-raise as CalculatorError
+            raise CalculatorError(str(e)) from e
 
     def undo(self):
         if not self.caretaker.can_undo():
@@ -64,7 +65,6 @@ class Calculator:
 def repl():
     calc = Calculator()
     print("Welcome to enhanced calculator. Type 'help' for commands.")
-    ops_available = sorted(list(get_operation_instance.__self__ if hasattr(get_operation_instance, "__self__") else []), key=str)  # harmless fallback
 
     while True:
         try:
@@ -121,11 +121,10 @@ def repl():
                 print(f"Error loading: {e}")
             continue
 
-        # Operation branch: rely on factory to raise if invalid
+        # Operation branch
         a_raw = input("first number: ")
         b_raw = input("second number: ")
         try:
-            # using EAFP validator
             a, b = parse_operands_eafp(a_raw, b_raw)
             res = calc.evaluate(raw, a, b)
             print(f"Result: {res}")
@@ -135,5 +134,4 @@ def repl():
             print(f"Unhandled error: {e}")
 
 if __name__ == "__main__":
-    from pathlib import Path
     repl()

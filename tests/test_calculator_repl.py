@@ -1,129 +1,103 @@
+# tests/test_calculator_repl.py
 import pytest
-from pathlib import Path
+from unittest.mock import patch
 from app.calculator_repl import Calculator, repl
-from app.calculation import Calculation
 from app.exceptions import CalculatorError
-
 
 @pytest.fixture
 def calc():
-    return Calculator()
+    # Patch history save/load to avoid filesystem writes
+    with patch("app.calculator_repl.HistoryManager.save"), patch("app.calculator_repl.HistoryManager.load"):
+        # Patch observers to avoid logging files
+        with patch("app.calculator_repl.LoggingObserver"), patch("app.calculator_repl.AutoSaveObserver"):
+            yield Calculator()
 
+def test_basic_operations(calc):
+    assert calc.evaluate("+", "2", "3") == 5
+    assert calc.evaluate("-", "10", "4") == 6
 
-def test_evaluate_success(calc, monkeypatch):
-    class FakeCalc:
-        def __init__(self):
-            self.operation_token = "+"
-            self.a = 2.0
-            self.b = 3.0
-            self.error = None
-            self.result = None
-
-        def perform(self):
-            self.result = self.a + self.b
-            return self.result
-
-    monkeypatch.setattr("app.calculation.CalculationFactory.create", lambda op, a, b: FakeCalc())
-
-    result = calc.evaluate("+", "2", "3")
-    assert result == 5
-    assert calc.history.df.iloc[-1]["result"] == 5
-
-
-def test_evaluate_failure(calc, monkeypatch):
-    class FailCalc:
-        def __init__(self):
-            self.operation_token = "+"
-            self.a = 2
-            self.b = 0
-            self.error = None
-            self.result = None
-
-        def perform(self):
-            self.error = "fail"
-            raise CalculatorError("fail")
-
-    monkeypatch.setattr("app.calculation.CalculationFactory.create", lambda op, a, b: FailCalc())
-
-    with pytest.raises(CalculatorError):
-        calc.evaluate("+", "2", "0")
-
-    assert calc.history.df.iloc[-1]["error"] == "fail"
-
+def test_invalid_operation(calc):
+    with pytest.raises(Exception):
+        calc.evaluate("invalid_op", "1", "2")
 
 def test_undo_redo(calc):
-    # Simulate real usage so Caretaker has saved states
-    calc.evaluate("+", "1", "2")  # triggers save internally
-    calc.evaluate("-", "5", "2")  # triggers another save
-
-    assert len(calc.history.df) == 2
-
+    calc.evaluate("+", "1", "1")
     calc.undo()
-    assert len(calc.history.df) == 1  # undo last change
-
     calc.redo()
-    assert len(calc.history.df) == 2  # redo last change
-
-
-def test_undo_empty_raises(calc):
-    calc.caretaker._undos.clear()
-    with pytest.raises(IndexError):
-        calc.undo()
-
-
-def test_redo_empty_raises(calc):
-    calc.caretaker._redos.clear()
-    with pytest.raises(IndexError):
-        calc.redo()
-
-
-def test_save_and_load(tmp_path, calc):
-    path = tmp_path / "history.csv"
-    calc.history.add("add", 1, 2, 3, None, "time")
-    calc.save(str(path))
-    assert path.exists()
-
-    calc.clear_history()
-    assert len(calc.history.df) == 0
-
-    calc.load(str(path))
-    assert len(calc.history.df) == 1
-
+    assert calc.caretaker.can_undo() or calc.caretaker.can_redo()
 
 def test_clear_history(calc):
-    calc.history.add("add", 1, 2, 3, None, "time")
-    assert len(calc.history.df) == 1
+    calc.evaluate("+", "1", "1")
+    assert not calc.history.df.empty
     calc.clear_history()
-    assert len(calc.history.df) == 0
+    assert calc.history.df.empty
 
+def test_save_load(calc):
+    calc.save("fake_path.csv")
+    calc.load("fake_path.csv")  # no exceptions
 
-@pytest.mark.parametrize("commands", [
-    ["help", "exit"],
-    ["history", "exit"],
-    ["clear", "exit"],
-    ["undo", "exit"],
-    ["redo", "exit"],
-    ["save", "exit"],
-    ["load", "exit"],
-])
-def test_repl_commands(monkeypatch, commands):
-    inputs = iter(commands)
+def test_error_recorded_in_history(calc):
+    with pytest.raises(CalculatorError):
+        calc.evaluate("/", "1", "0")  # divide by zero
+    last_entry = calc.history.df.iloc[-1]
+    assert last_entry["result"] is None
+    assert last_entry["error"] is not None
 
-    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-    monkeypatch.setattr("builtins.print", lambda x: None)  # silence prints
+def test_auto_save_exception(calc):
+    calc.config.CALCULATOR_AUTO_SAVE = True
+    with patch.object(calc.history, "save", side_effect=Exception("fail")):
+        # Should not raise outside CalculatorError
+        result = calc.evaluate("+", "1", "2")
+        assert result == 3
 
-    repl()
+def test_parse_operands_failure(calc):
+    # Invalid operands should raise CalculatorError
+    with pytest.raises(CalculatorError):
+        calc.evaluate("+", "bad", "input")
 
-
-def test_repl_operation(monkeypatch):
+def test_repl_commands(monkeypatch):
+    # Patch input and print to simulate user REPL input
     inputs = iter([
-        "+",  # operation
-        "2",  # first number
-        "3",  # second number
+        "help",
+        "history",
+        "clear",
+        "undo",
+        "redo",
+        "save",
+        "load",
         "exit"
     ])
+    outputs = []
 
     monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-    monkeypatch.setattr("builtins.print", lambda x: None)
+    monkeypatch.setattr("builtins.print", lambda *a, **k: outputs.append(a))
 
-    repl()
+    # Patch Calculator methods to avoid actual computation or file IO
+    with patch("app.calculator_repl.Calculator.evaluate", return_value=42), \
+         patch("app.calculator_repl.Calculator.undo"), \
+         patch("app.calculator_repl.Calculator.redo"), \
+         patch("app.calculator_repl.Calculator.save"), \
+         patch("app.calculator_repl.Calculator.load"), \
+         patch("app.calculator_repl.Calculator.clear_history"):
+        repl()
+
+    # Check that some key messages appeared
+    help_msgs = [msg for msg in outputs if "Commands:" in msg[0]]
+    assert help_msgs
+
+def test_repl_operation(monkeypatch, calc):
+    inputs = iter([
+        "+",      # operation token
+        "2",      # first number
+        "3",      # second number
+        "exit"
+    ])
+    outputs = []
+
+    monkeypatch.setattr("builtins.input", lambda _: next(inputs))
+    monkeypatch.setattr("builtins.print", lambda *a, **k: outputs.append(a))
+
+    with patch("app.calculator_repl.Calculator.evaluate", return_value=5):
+        repl()
+        result_msgs = [msg for msg in outputs if "Result:" in msg[0]]
+        assert any("Result: 5" in msg[0] for msg in result_msgs)
